@@ -2,9 +2,9 @@ name: Sync API Data to R2
 
 on:
   schedule:
-    # يعمل كل 4 أيام الساعة 00:00 بالتوقيت العالمي
+    # يعمل كل 4 أيام الساعة 00:00 بالتوقيت العالمي (UTC)
     - cron: '0 0 */4 * *'
-  workflow_dispatch: # يسمح بالتشغيل اليدوي من واجهة جيتهاب
+  workflow_dispatch: # يسمح بالتشغيل اليدوي من واجهة GitHub
 
 jobs:
   sync:
