@@ -1,4 +1,4 @@
-name: Sync API Data to R2 (Parallel)
+name: Sync API Data to R2 (6 Parallel Jobs)
 
 on:
   schedule:
@@ -7,177 +7,164 @@ on:
   workflow_dispatch: # يسمح بالتشغيل اليدوي
 
 env:
-  # المتغيرات المشتركة لكل الوظائف
-  API_BASE_URL: ${{ secrets.API_BASE_URL }}
-  API_TOKEN: ${{ secrets.API_TOKEN }}
-  SOURCE_ID: ${{ secrets.SOURCE_ID }}
-  R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  API_BASE_URL:         ${{ secrets.API_BASE_URL }}
+  API_TOKEN:            ${{ secrets.API_TOKEN }}
+  SOURCE_ID:            ${{ secrets.SOURCE_ID }}
+  R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
+  R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
   R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-  R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+  R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
 
 jobs:
-  # ─────────────────────────────────────────
-  # Job 1: الدول 0-82 (83 دولة)
-  # ─────────────────────────────────────────
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 1: الدول 0-41 (42 دولة) + جلب التجار merchants.json
+  # ─────────────────────────────────────────────────────────────────────
   sync-part-1:
-    name: "Sync Part 1: Countries 0-82"
+    name: "Part 1: Countries 0-41 + Merchants"
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 ساعات
+    timeout-minutes: 360
     env:
-      COUNTRY_RANGE: "0-82"
+      COUNTRY_RANGE: "0-41"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install dependencies
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Sync Script (Part 1)
+          if [ -z "$R2_ENDPOINT_URL" ]; then
+            echo "❌ R2_ENDPOINT_URL secret is EMPTY!"
+            exit 1
+          fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then
+            echo "❌ R2_ENDPOINT_URL must start with https://"
+            echo "   Got: $R2_ENDPOINT_URL"
+            echo "   Expected: https://ACCOUNT_ID.r2.cloudflarestorage.com"
+            exit 1
+          fi
+          echo "✅ R2_ENDPOINT_URL looks valid"
+      - name: Run Sync (Part 1 + Merchants)
         run: python sync.py
 
-  # ─────────────────────────────────────────
-  # Job 2: الدول 83-165 (83 دولة)
-  # ─────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 2: الدول 42-83 (42 دولة)
+  # ─────────────────────────────────────────────────────────────────────
   sync-part-2:
-    name: "Sync Part 2: Countries 83-165"
+    name: "Part 2: Countries 42-83"
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      COUNTRY_RANGE: "83-165"
+      COUNTRY_RANGE: "42-83"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install dependencies
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Sync Script (Part 2)
+          if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then echo "❌ Must start with https://"; exit 1; fi
+          echo "✅ R2_ENDPOINT_URL OK"
+      - name: Run Sync (Part 2)
         run: python sync.py
 
-  # ─────────────────────────────────────────
-  # Job 3: الدول 166-249 (84 دولة)
-  # ─────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 3: الدول 84-125 (42 دولة)
+  # ─────────────────────────────────────────────────────────────────────
   sync-part-3:
-    name: "Sync Part 3: Countries 166-249"
+    name: "Part 3: Countries 84-125"
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      COUNTRY_RANGE: "166-249"
+      COUNTRY_RANGE: "84-125"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install dependencies
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Sync Script (Part 3)
+          if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then echo "❌ Must start with https://"; exit 1; fi
+          echo "✅ R2_ENDPOINT_URL OK"
+      - name: Run Sync (Part 3)
         run: python sync.py
 
-  # ─────────────────────────────────────────
-  # Job 4: دمج الملفات الجزئية في ملفين نهائيين (يعتمد على نجاح الـ 3 وظائف السابقة)
-  # ─────────────────────────────────────────
-  merge-results:
-    name: "Merge Partial Results"
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 4: الدول 126-167 (42 دولة)
+  # ─────────────────────────────────────────────────────────────────────
+  sync-part-4:
+    name: "Part 4: Countries 126-167"
     runs-on: ubuntu-latest
-    needs: [sync-part-1, sync-part-2, sync-part-3]
-    if: success()
+    timeout-minutes: 360
+    env:
+      COUNTRY_RANGE: "126-167"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Install dependencies
-        run: pip install boto3
-
-      - name: Merge and Upload Final Files
-        env:
-          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
         run: |
-          python - <<'EOF'
-          import os, json, boto3
-          from botocore.config import Config
-          
-          env = {
-              "R2_ENDPOINT_URL": os.environ["R2_ENDPOINT_URL"],
-              "R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
-              "R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
-              "R2_BUCKET_NAME": os.environ["R2_BUCKET_NAME"]
-          }
-          
-          s3 = boto3.client("s3", endpoint_url=env["R2_ENDPOINT_URL"],
-              aws_access_key_id=env["R2_ACCESS_KEY_ID"],
-              aws_secret_access_key=env["R2_SECRET_ACCESS_KEY"],
-              config=Config(signature_version="s3v4"))
-          
-          # دمج الكوبونات
-          all_coupons = []
-          seen_uuids = set()
-          for part in ["sync-part-1", "sync-part-2", "sync-part-3"]:
-              obj = s3.get_object(Bucket=env["R2_BUCKET_NAME"], Key=f"coupons_part_{part}.json")
-              coupons = json.loads(obj["Body"].read())
-              for c in coupons:
-                  uid = c.get("uuid")
-                  if uid and uid not in seen_uuids:
-                      seen_uuids.add(uid)
-                      all_coupons.append(c)
-          
-          # دمج التجار
-          all_merchants = []
-          seen_mids = set()
-          for part in ["sync-part-1", "sync-part-2", "sync-part-3"]:
-              obj = s3.get_object(Bucket=env["R2_BUCKET_NAME"], Key=f"merchants_part_{part}.json")
-              merchants = json.loads(obj["Body"].read())
-              for m in merchants:
-                  uid = m.get("uuid") or m.get("merchant_id")
-                  if uid and uid not in seen_mids:
-                      seen_mids.add(uid)
-                      all_merchants.append(m)
-          
-          # رفع الملفات النهائية
-          def upload(data, filename):
-              json_data = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
-              s3.put_object(Bucket=env["R2_BUCKET_NAME"], Key=filename,
-                  Body=json_data.encode('utf-8'), ContentType="application/json")
-              print(f"✅ Uploaded {filename} ({len(data)} items)")
-          
-          upload(all_coupons, "coupons.json")
-          upload(all_merchants, "merchants.json")
-          
-          # حذف الملفات الجزئية
-          for part in ["sync-part-1", "sync-part-2", "sync-part-3"]:
-              for prefix in ["coupons_part_", "merchants_part_"]:
-                  try:
-                      s3.delete_object(Bucket=env["R2_BUCKET_NAME"], Key=f"{prefix}{part}.json")
-                  except: pass
-          
-          print(f"🎉 Merge complete: {len(all_coupons)} coupons, {len(all_merchants)} merchants")
-          EOF
+          if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then echo "❌ Must start with https://"; exit 1; fi
+          echo "✅ R2_ENDPOINT_URL OK"
+      - name: Run Sync (Part 4)
+        run: python sync.py
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 5: الدول 168-209 (42 دولة)
+  # ─────────────────────────────────────────────────────────────────────
+  sync-part-5:
+    name: "Part 5: Countries 168-209"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      COUNTRY_RANGE: "168-209"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
+        run: |
+          if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then echo "❌ Must start with https://"; exit 1; fi
+          echo "✅ R2_ENDPOINT_URL OK"
+      - name: Run Sync (Part 5)
+        run: python sync.py
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 6: الدول 210-249 (40 دولة)
+  # ─────────────────────────────────────────────────────────────────────
+  sync-part-6:
+    name: "Part 6: Countries 210-249"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      COUNTRY_RANGE: "210-249"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
+        run: |
+          if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then echo "❌ Must start with https://"; exit 1; fi
+          echo "✅ R2_ENDPOINT_URL OK"
+      - name: Run Sync (Part 6)
+        run: python sync.py
