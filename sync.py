@@ -185,14 +185,17 @@ def main():
         "Accept": "application/json"
     }
 
-    # ── إنشاء عميل S3/R2 ──────────────────────
+
+# ── إنشاء عميل S3/R2 ──────────────────────
     s3 = boto3.client(
         "s3",
         endpoint_url=r2_endpoint,
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"].strip(),
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"].strip(),
+        region_name="auto",  # 👈 هذا السطر ضروري جداً لضبط توقيع Cloudflare R2
         config=Config(signature_version="s3v4")
     )
+
 
     print("=" * 70)
     print(f"🌍 SYNC JOB [{job_id}] — Countries [{start_idx}–{end_idx}]")
