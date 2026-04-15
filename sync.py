@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🌍 Coupon Data Full Sync Script - Parallel Jobs Version
-✅ يدعم معالجة نطاق محدد من الدول عبر متغير البيئة COUNTRY_RANGE
-✅ مثالي للتشغيل المتوازي على GitHub Actions (3 Jobs)
-✅ يزيل التكرار، يتعامل مع pagination، ويرفع لـ R2 بأمان
+🌍 Coupon Data Full Sync Script - 6 Parallel Jobs + Per-Country Files
+✅ كل دولة لها ملف منفصل: coupons_DZ.json, coupons_FR.json ...
+✅ لا فلترة - البيانات كاملة كما هي من API
+✅ 6 Jobs متوازية لأقصى سرعة
+✅ التجار في ملف واحد: merchants.json
 """
 
 import os
@@ -15,7 +16,7 @@ import boto3
 from botocore.config import Config
 
 # ─────────────────────────────────────────────
-# 🌍 قائمة جميع الدول (252 دولة)
+# 🌍 قائمة جميع الدول (250 دولة)
 # ─────────────────────────────────────────────
 ALL_COUNTRIES = [
     "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AX", "AZ",
@@ -37,197 +38,238 @@ ALL_COUNTRIES = [
 ]
 
 # ─────────────────────────────────────────────
-# 📥 دالة جلب الصفحات مع Pagination
+# 🔧 التحقق من صحة R2_ENDPOINT_URL
 # ─────────────────────────────────────────────
-def fetch_all_pages(base_endpoint, params, headers, page_delay=8):
+def validate_r2_endpoint(url):
+    """يتأكد أن URL صالح ويبدأ بـ https://"""
+    if not url:
+        raise ValueError("❌ R2_ENDPOINT_URL is empty! Please set it in GitHub Secrets.")
+    url = url.strip()
+    if not url.startswith("https://") and not url.startswith("http://"):
+        raise ValueError(
+            f"❌ R2_ENDPOINT_URL must start with https:// — Got: '{url}'\n"
+            "  Example: https://ACCOUNT_ID.r2.cloudflarestorage.com"
+        )
+    return url
+
+# ─────────────────────────────────────────────
+# 📥 جلب الصفحات مع Pagination الكاملة
+# ─────────────────────────────────────────────
+def fetch_all_pages(base_endpoint, params, headers, page_delay=8, max_retries=3):
+    """يجلب جميع الصفحات مع إعادة المحاولة عند الفشل"""
     results = []
     offset = 0
     page_count = 0
-    
+
     while True:
         params["offset"] = offset
         print(f"   📄 Page {page_count + 1} | Offset: {offset}")
-        
-        try:
-            response = requests.get(base_endpoint, params=params, headers=headers, timeout=30)
-            
-            if response.status_code == 400:
-                print(f"   ⚠️  Bad Request (400): {response.text[:200]}")
+
+        success = False
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = requests.get(
+                    base_endpoint, params=params, headers=headers, timeout=45
+                )
+
+                if response.status_code == 400:
+                    print(f"   ⚠️  Bad Request (400): {response.text[:200]}")
+                    return results
+
+                if response.status_code == 429:
+                    wait = 30 * attempt
+                    print(f"   ⚠️  Rate limited (429) — waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+                page_results = data.get("results", [])
+                results.extend(page_results)
+
+                print(f"   ✅ Got {len(page_results)} items | Total: {len(results)}")
+
+                if not data.get("next") or len(page_results) == 0:
+                    print("   🏁 End of pagination.")
+                    return results
+
+                offset += len(page_results)
+                page_count += 1
+
+                if page_count > 0:
+                    print(f"   ⏳ Waiting {page_delay}s...")
+                    time.sleep(page_delay)
+
+                success = True
                 break
-                
-            response.raise_for_status()
-            data = response.json()
-            page_results = data.get("results", [])
-            results.extend(page_results)
-            
-            print(f"   ✅ Got {len(page_results)} items | Total: {len(results)}")
-            
-            if not data.get("next") or len(page_results) == 0:
-                print("   🏁 End of pagination.")
-                break
-            
-            offset += len(page_results)
-            page_count += 1
-            
-            if page_count > 0:
-                print(f"   ⏳ Waiting {page_delay}s...")
-                time.sleep(page_delay)
-                
-        except requests.exceptions.RequestException as e:
-            print(f"   ❌ Network error: {e}")
-            if page_count == 0:
-                raise
-            break
-            
+
+            except requests.exceptions.RequestException as e:
+                print(f"   ⚠️  Attempt {attempt}/{max_retries} failed: {e}")
+                if attempt < max_retries:
+                    time.sleep(15 * attempt)
+                else:
+                    if page_count == 0:
+                        raise
+                    print(f"   ❌ Giving up after {max_retries} retries.")
+                    return results
+
+        if not success:
+            return results
+
     return results
 
 # ─────────────────────────────────────────────
-# ☁️ رفع البيانات إلى Cloudflare R2
+# ☁️ رفع ملف JSON واحد إلى R2
 # ─────────────────────────────────────────────
-def upload_to_r2(data_list, filename, env):
-    print(f"☁️ Uploading {filename} to R2...")
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=env["R2_ENDPOINT_URL"],
-        aws_access_key_id=env["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=env["R2_SECRET_ACCESS_KEY"],
-        config=Config(signature_version="s3v4")
-    )
-    
-    json_data = json.dumps(data_list, ensure_ascii=False, separators=(',', ':'))
-    s3.put_object(
-        Bucket=env["R2_BUCKET_NAME"],
+def upload_to_r2(data, filename, s3_client, bucket_name):
+    """يرفع قائمة أو dict إلى R2 كـ JSON"""
+    print(f"☁️  Uploading {filename} ({len(data) if isinstance(data, list) else '?'} items)...")
+    json_data = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+    s3_client.put_object(
+        Bucket=bucket_name,
         Key=filename,
         Body=json_data.encode('utf-8'),
         ContentType="application/json"
     )
-    print(f"✅ Uploaded {filename} ({len(data_list)} items) to {env['R2_BUCKET_NAME']}")
+    print(f"   ✅ Uploaded {filename}")
 
 # ─────────────────────────────────────────────
-# 🧹 إزالة التكرار
+# 🏪 جلب التجار (مرة واحدة لكل Job)
 # ─────────────────────────────────────────────
-def deduplicate_coupons(coupons_list):
-    seen_uuids = set()
-    unique = []
-    for c in coupons_list:
-        uid = c.get("uuid")
-        if uid and uid not in seen_uuids:
-            seen_uuids.add(uid)
-            unique.append(c)
-    removed = len(coupons_list) - len(unique)
-    if removed > 0:
-        print(f"🧹 Removed {removed} duplicate coupons")
-    return unique
+def fetch_merchants(base_url, source_id, headers, page_delay=8):
+    print("\n🟢 Fetching Merchants...")
+    params = {
+        "limit": 100,
+        "status": "active",
+        "source_id": source_id
+    }
+    try:
+        merchants = fetch_all_pages(
+            f"{base_url}/public_api/v1/merchants",
+            params,
+            headers,
+            page_delay=page_delay
+        )
+        print(f"   📦 Total merchants: {len(merchants)}")
+        return merchants
+    except Exception as e:
+        print(f"   ❌ Merchant fetch failed: {e}")
+        return []
 
 # ─────────────────────────────────────────────
 # 🚀 الدالة الرئيسية
 # ─────────────────────────────────────────────
 def main():
-    # قراءة متغيرات البيئة
-    base_url = os.environ["API_BASE_URL"].rstrip('/')
-    api_token = os.environ["API_TOKEN"]
-    source_id = os.environ.get("SOURCE_ID", "")
-    
-    # ✅ قراءة نطاق الدول من متغير البيئة (مثال: "0-82" أو "83-165")
-    country_range = os.environ.get("COUNTRY_RANGE", "0-249")
+    # ── قراءة متغيرات البيئة ──────────────────
+    base_url   = os.environ["API_BASE_URL"].rstrip('/')
+    api_token  = os.environ["API_TOKEN"]
+    source_id  = os.environ.get("SOURCE_ID", "")
+    bucket     = os.environ["R2_BUCKET_NAME"]
+
+    # ✅ التحقق من صحة R2_ENDPOINT_URL قبل أي شيء
+    r2_endpoint = validate_r2_endpoint(os.environ.get("R2_ENDPOINT_URL", ""))
+
+    # ── نطاق الدول لهذا الـ Job ───────────────
+    country_range    = os.environ.get("COUNTRY_RANGE", "0-249")
     start_idx, end_idx = map(int, country_range.split('-'))
-    countries_to_process = ALL_COUNTRIES[start_idx:end_idx+1]
-    
-    env = {
-        "R2_ENDPOINT_URL": os.environ["R2_ENDPOINT_URL"],
-        "R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
-        "R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
-        "R2_BUCKET_NAME": os.environ["R2_BUCKET_NAME"]
-    }
-    
+    countries        = ALL_COUNTRIES[start_idx:end_idx + 1]
+
+    # ── هل هذا الـ Job هو المسؤول عن التجار؟ ──
+    # فقط الـ Job الأول (0-41) يجلب التجار لتجنب التكرار
+    is_merchant_job = (start_idx == 0)
+
+    job_id = os.environ.get("GITHUB_JOB", f"part-{start_idx}")
+
     headers = {
         "Authorization": api_token,
         "Accept": "application/json"
     }
-    
+
+    # ── إنشاء عميل S3/R2 ──────────────────────
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=r2_endpoint,
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        config=Config(signature_version="s3v4")
+    )
+
     print("=" * 70)
-    print(f"🌍 SYNC JOB - Countries [{start_idx}-{end_idx}]")
-    print(f"📡 API Base: {base_url}")
-    print(f"🔑 Source ID: {source_id[:8]}...")
-    print(f"📊 Countries to process: {len(countries_to_process)}")
+    print(f"🌍 SYNC JOB [{job_id}] — Countries [{start_idx}–{end_idx}]")
+    print(f"📡 API Base   : {base_url}")
+    print(f"☁️  R2 Bucket : {bucket}")
+    print(f"📊 Countries  : {len(countries)}")
+    print(f"🏪 Fetch merchants: {'YES' if is_merchant_job else 'NO (handled by Job 1)'}")
     print("=" * 70)
-    
-    start_time = time.time()
-    all_coupons_raw = []
-    
+
+    start_time   = time.time()
+    total_uploaded = 0
+
     # ─────────────────────────────────────────
-    # 1️⃣ جلب الكوبونات (دولة دولة)
+    # 1️⃣ كوبونات — ملف منفصل لكل دولة
     # ─────────────────────────────────────────
-    print("\n🟢 STEP 1: Fetching Coupons...")
-    
-    for i, country in enumerate(countries_to_process, 1):
+    print("\n🟢 STEP 1: Fetching & Uploading Coupons per Country...\n")
+
+    for i, country in enumerate(countries, 1):
         elapsed = time.time() - start_time
-        print(f"\n🌍 [{i}/{len(countries_to_process)}] {country} (Elapsed: {elapsed:.0f}s)")
-        
+        print(f"\n🌍 [{i}/{len(countries)}] {country}  (Elapsed: {elapsed:.0f}s)")
+
         params = {
-            "limit": 100,
+            "limit":     100,
             "is_active": "true",
             "source_id": source_id,
-            "geos": country
+            "geos":      country
         }
-        
+
         try:
-            country_coupons = fetch_all_pages(
+            coupons = fetch_all_pages(
                 f"{base_url}/public_api/v1/coupons",
                 params,
                 headers,
-                page_delay=8  # ✅ تأخير مخفض قليلاً للسرعة
+                page_delay=6
             )
-            all_coupons_raw.extend(country_coupons)
-            print(f"   📥 Total so far: {len(all_coupons_raw)}")
+
+            # ── رفع فوري لكل دولة — لا حاجة للانتظار حتى النهاية
+            filename = f"coupons_{country}.json"
+            upload_to_r2(coupons, filename, s3, bucket)
+            total_uploaded += 1
+            print(f"   📦 {country}: {len(coupons)} coupons → {filename}")
+
         except Exception as e:
             print(f"   ❌ Failed {country}: {e}")
-        
-        # تأخير بسيط بين الدول
-        if i < len(countries_to_process):
-            time.sleep(2)
-    
-    # إزالة التكرار ورفع الكوبونات
-    print(f"\n📊 Raw coupons: {len(all_coupons_raw)}")
-    unique_coupons = deduplicate_coupons(all_coupons_raw)
-    
-    # ✅ اسم ملف فريد لكل Job لتجنب التعارض عند الرفع المتوازي
-    job_id = os.environ.get("GITHUB_JOB", f"part-{start_idx}")
-    upload_to_r2(unique_coupons, f"coupons_part_{job_id}.json", env)
-    
+            # ارفع ملف فارغ لتجنب الخطأ في البوت
+            try:
+                upload_to_r2([], f"coupons_{country}.json", s3, bucket)
+            except Exception:
+                pass
+
+        # تأخير بسيط بين الدول (ليس بين الصفحات)
+        if i < len(countries):
+            time.sleep(1)
+
     # ─────────────────────────────────────────
-    # 2️⃣ جلب التجار (عالمي مرة واحدة)
+    # 2️⃣ التجار — يُجلب فقط من الـ Job الأول
     # ─────────────────────────────────────────
-    print("\n🟢 STEP 2: Fetching Merchants (Global)...")
-    
-    merch_params = {
-        "limit": 100,
-        "status": "active",
-        "source_id": source_id
-    }
-    
-    try:
-        merchants = fetch_all_pages(
-            f"{base_url}/public_api/v1/merchants",
-            merch_params,
-            headers,
-            page_delay=8
-        )
-        upload_to_r2(merchants, f"merchants_part_{job_id}.json", env)
-    except Exception as e:
-        print(f"❌ Merchant fetch failed: {e}")
-        merchants = []
-    
+    if is_merchant_job:
+        print("\n🟢 STEP 2: Fetching Merchants (Global — Job 1 only)...")
+        merchants = fetch_merchants(base_url, source_id, headers, page_delay=6)
+        if merchants:
+            upload_to_r2(merchants, "merchants.json", s3, bucket)
+        else:
+            print("   ⚠️  No merchants fetched — skipping upload.")
+    else:
+        print(f"\n⏭️  STEP 2: Skipping merchants (handled by Job 1).")
+
     # ─────────────────────────────────────────
     # 📊 التقرير النهائي
     # ─────────────────────────────────────────
     total_time = time.time() - start_time
     print("\n" + "=" * 70)
-    print(f"🎉 JOB COMPLETED - Range [{start_idx}-{end_idx}]")
-    print(f"📦 coupons_part_{job_id}.json : {len(unique_coupons)} unique coupons")
-    print(f"📦 merchants_part_{job_id}.json : {len(merchants)} merchants")
-    print(f"⏱️  Runtime: {total_time:.0f}s ({total_time/60:.1f} mins)")
+    print(f"🎉 JOB DONE — [{job_id}]  Range [{start_idx}–{end_idx}]")
+    print(f"📦 Countries uploaded : {total_uploaded} / {len(countries)}")
+    print(f"⏱️  Runtime            : {total_time:.0f}s  ({total_time / 60:.1f} min)")
     print("=" * 70)
+
 
 if __name__ == "__main__":
     main()
