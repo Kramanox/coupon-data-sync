@@ -1,14 +1,31 @@
-name: Sync API Data to R2
+name: Sync API Data to R2 (Parallel)
 
 on:
   schedule:
-    # يعمل كل 4 أيام الساعة 00:00 بالتوقيت العالمي (UTC)
-    - cron: '0 0 */4 * *'
-  workflow_dispatch: # يسمح بالتشغيل اليدوي من واجهة GitHub
+    # يعمل كل 5 أيام الساعة 00:00 UTC
+    - cron: '0 0 */5 * *'
+  workflow_dispatch: # يسمح بالتشغيل اليدوي
+
+env:
+  # المتغيرات المشتركة لكل الوظائف
+  API_BASE_URL: ${{ secrets.API_BASE_URL }}
+  API_TOKEN: ${{ secrets.API_TOKEN }}
+  SOURCE_ID: ${{ secrets.SOURCE_ID }}
+  R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
 
 jobs:
-  sync:
+  # ─────────────────────────────────────────
+  # Job 1: الدول 0-82 (83 دولة)
+  # ─────────────────────────────────────────
+  sync-part-1:
+    name: "Sync Part 1: Countries 0-82"
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 ساعات
+    env:
+      COUNTRY_RANGE: "0-82"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,13 +40,144 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Sync Script
+      - name: Run Sync Script (Part 1)
+        run: python sync.py
+
+  # ─────────────────────────────────────────
+  # Job 2: الدول 83-165 (83 دولة)
+  # ─────────────────────────────────────────
+  sync-part-2:
+    name: "Sync Part 2: Countries 83-165"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      COUNTRY_RANGE: "83-165"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Sync Script (Part 2)
+        run: python sync.py
+
+  # ─────────────────────────────────────────
+  # Job 3: الدول 166-249 (84 دولة)
+  # ─────────────────────────────────────────
+  sync-part-3:
+    name: "Sync Part 3: Countries 166-249"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      COUNTRY_RANGE: "166-249"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Sync Script (Part 3)
+        run: python sync.py
+
+  # ─────────────────────────────────────────
+  # Job 4: دمج الملفات الجزئية في ملفين نهائيين (يعتمد على نجاح الـ 3 وظائف السابقة)
+  # ─────────────────────────────────────────
+  merge-results:
+    name: "Merge Partial Results"
+    runs-on: ubuntu-latest
+    needs: [sync-part-1, sync-part-2, sync-part-3]
+    if: success()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install boto3
+
+      - name: Merge and Upload Final Files
         env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          API_TOKEN: ${{ secrets.API_TOKEN }}
-          SOURCE_ID: ${{ secrets.SOURCE_ID }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python sync.py
+        run: |
+          python - <<'EOF'
+          import os, json, boto3
+          from botocore.config import Config
+          
+          env = {
+              "R2_ENDPOINT_URL": os.environ["R2_ENDPOINT_URL"],
+              "R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
+              "R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
+              "R2_BUCKET_NAME": os.environ["R2_BUCKET_NAME"]
+          }
+          
+          s3 = boto3.client("s3", endpoint_url=env["R2_ENDPOINT_URL"],
+              aws_access_key_id=env["R2_ACCESS_KEY_ID"],
+              aws_secret_access_key=env["R2_SECRET_ACCESS_KEY"],
+              config=Config(signature_version="s3v4"))
+          
+          # دمج الكوبونات
+          all_coupons = []
+          seen_uuids = set()
+          for part in ["sync-part-1", "sync-part-2", "sync-part-3"]:
+              obj = s3.get_object(Bucket=env["R2_BUCKET_NAME"], Key=f"coupons_part_{part}.json")
+              coupons = json.loads(obj["Body"].read())
+              for c in coupons:
+                  uid = c.get("uuid")
+                  if uid and uid not in seen_uuids:
+                      seen_uuids.add(uid)
+                      all_coupons.append(c)
+          
+          # دمج التجار
+          all_merchants = []
+          seen_mids = set()
+          for part in ["sync-part-1", "sync-part-2", "sync-part-3"]:
+              obj = s3.get_object(Bucket=env["R2_BUCKET_NAME"], Key=f"merchants_part_{part}.json")
+              merchants = json.loads(obj["Body"].read())
+              for m in merchants:
+                  uid = m.get("uuid") or m.get("merchant_id")
+                  if uid and uid not in seen_mids:
+                      seen_mids.add(uid)
+                      all_merchants.append(m)
+          
+          # رفع الملفات النهائية
+          def upload(data, filename):
+              json_data = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+              s3.put_object(Bucket=env["R2_BUCKET_NAME"], Key=filename,
+                  Body=json_data.encode('utf-8'), ContentType="application/json")
+              print(f"✅ Uploaded {filename} ({len(data)} items)")
+          
+          upload(all_coupons, "coupons.json")
+          upload(all_merchants, "merchants.json")
+          
+          # حذف الملفات الجزئية
+          for part in ["sync-part-1", "sync-part-2", "sync-part-3"]:
+              for prefix in ["coupons_part_", "merchants_part_"]:
+                  try:
+                      s3.delete_object(Bucket=env["R2_BUCKET_NAME"], Key=f"{prefix}{part}.json")
+                  except: pass
+          
+          print(f"🎉 Merge complete: {len(all_coupons)} coupons, {len(all_merchants)} merchants")
+          EOF
