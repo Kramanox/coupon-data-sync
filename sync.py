@@ -5,7 +5,7 @@
 ✅ كل دولة لها ملف منفصل: coupons_DZ.json, coupons_FR.json ...
 ✅ لا فلترة - البيانات كاملة كما هي من API
 ✅ 6 Jobs متوازية لأقصى سرعة
-✅ التجار في ملف واحد: merchants.json
+✅ التجار في ملف واحد: merchants.json (Job مستقل)
 """
 
 import os
@@ -134,7 +134,7 @@ def upload_to_r2(data, filename, s3_client, bucket_name):
     print(f"   ✅ Uploaded {filename}")
 
 # ─────────────────────────────────────────────
-# 🏪 جلب التجار (مرة واحدة لكل Job)
+# 🏪 جلب التجار
 # ─────────────────────────────────────────────
 def fetch_merchants(base_url, source_id, headers, page_delay=8):
     print("\n🟢 Fetching Merchants...")
@@ -169,40 +169,63 @@ def main():
     # ✅ التحقق من صحة R2_ENDPOINT_URL قبل أي شيء
     r2_endpoint = validate_r2_endpoint(os.environ.get("R2_ENDPOINT_URL", ""))
 
-    # ── نطاق الدول لهذا الـ Job ───────────────
-    country_range    = os.environ.get("COUNTRY_RANGE", "0-249")
-    start_idx, end_idx = map(int, country_range.split('-'))
-    countries        = ALL_COUNTRIES[start_idx:end_idx + 1]
-
-    # ── هل هذا الـ Job هو المسؤول عن التجار؟ ──
-    # فقط الـ Job الأول (0-41) يجلب التجار لتجنب التكرار
-    is_merchant_job = (start_idx == 0)
-
-    job_id = os.environ.get("GITHUB_JOB", f"part-{start_idx}")
+    # ── هل هذا Job مخصص للتجار فقط؟ ──────────
+    fetch_merchants_only = os.environ.get("FETCH_MERCHANTS_ONLY", "false").lower() == "true"
 
     headers = {
         "Authorization": api_token,
         "Accept": "application/json"
     }
 
-
-# ── إنشاء عميل S3/R2 ──────────────────────
+    # ── إنشاء عميل S3/R2 ──────────────────────
     s3 = boto3.client(
         "s3",
         endpoint_url=r2_endpoint,
         aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"].strip(),
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"].strip(),
-        region_name="auto",  # 👈 هذا السطر ضروري جداً لضبط توقيع Cloudflare R2
+        region_name="auto",
         config=Config(signature_version="s3v4")
     )
 
+    # ─────────────────────────────────────────
+    # 🏪 وضع التجار فقط — Job مستقل
+    # ─────────────────────────────────────────
+    if fetch_merchants_only:
+        job_id = os.environ.get("GITHUB_JOB", "merchants")
+        print("=" * 70)
+        print(f"🏪 MERCHANTS JOB [{job_id}]")
+        print(f"📡 API Base   : {base_url}")
+        print(f"☁️  R2 Bucket : {bucket}")
+        print("=" * 70)
+
+        start_time = time.time()
+        merchants = fetch_merchants(base_url, source_id, headers, page_delay=6)
+        if merchants:
+            upload_to_r2(merchants, "merchants.json", s3, bucket)
+        else:
+            print("   ⚠️  No merchants fetched — skipping upload.")
+
+        total_time = time.time() - start_time
+        print("\n" + "=" * 70)
+        print(f"🎉 MERCHANTS JOB DONE")
+        print(f"📦 Merchants uploaded : {len(merchants)}")
+        print(f"⏱️  Runtime            : {total_time:.0f}s  ({total_time / 60:.1f} min)")
+        print("=" * 70)
+        return
+
+    # ─────────────────────────────────────────
+    # 🌍 وضع الكوبونات — Jobs العادية
+    # ─────────────────────────────────────────
+    country_range    = os.environ.get("COUNTRY_RANGE", "0-249")
+    start_idx, end_idx = map(int, country_range.split('-'))
+    countries        = ALL_COUNTRIES[start_idx:end_idx + 1]
+    job_id           = os.environ.get("GITHUB_JOB", f"part-{start_idx}")
 
     print("=" * 70)
     print(f"🌍 SYNC JOB [{job_id}] — Countries [{start_idx}–{end_idx}]")
     print(f"📡 API Base   : {base_url}")
     print(f"☁️  R2 Bucket : {bucket}")
     print(f"📊 Countries  : {len(countries)}")
-    print(f"🏪 Fetch merchants: {'YES' if is_merchant_job else 'NO (handled by Job 1)'}")
     print("=" * 70)
 
     start_time   = time.time()
@@ -211,7 +234,7 @@ def main():
     # ─────────────────────────────────────────
     # 1️⃣ كوبونات — ملف منفصل لكل دولة
     # ─────────────────────────────────────────
-    print("\n🟢 STEP 1: Fetching & Uploading Coupons per Country...\n")
+    print("\n🟢 Fetching & Uploading Coupons per Country...\n")
 
     for i, country in enumerate(countries, 1):
         elapsed = time.time() - start_time
@@ -232,7 +255,6 @@ def main():
                 page_delay=6
             )
 
-            # ── رفع فوري لكل دولة — لا حاجة للانتظار حتى النهاية
             filename = f"coupons_{country}.json"
             upload_to_r2(coupons, filename, s3, bucket)
             total_uploaded += 1
@@ -240,28 +262,13 @@ def main():
 
         except Exception as e:
             print(f"   ❌ Failed {country}: {e}")
-            # ارفع ملف فارغ لتجنب الخطأ في البوت
             try:
                 upload_to_r2([], f"coupons_{country}.json", s3, bucket)
             except Exception:
                 pass
 
-        # تأخير بسيط بين الدول (ليس بين الصفحات)
         if i < len(countries):
             time.sleep(1)
-
-    # ─────────────────────────────────────────
-    # 2️⃣ التجار — يُجلب فقط من الـ Job الأول
-    # ─────────────────────────────────────────
-    if is_merchant_job:
-        print("\n🟢 STEP 2: Fetching Merchants (Global — Job 1 only)...")
-        merchants = fetch_merchants(base_url, source_id, headers, page_delay=6)
-        if merchants:
-            upload_to_r2(merchants, "merchants.json", s3, bucket)
-        else:
-            print("   ⚠️  No merchants fetched — skipping upload.")
-    else:
-        print(f"\n⏭️  STEP 2: Skipping merchants (handled by Job 1).")
 
     # ─────────────────────────────────────────
     # 📊 التقرير النهائي
