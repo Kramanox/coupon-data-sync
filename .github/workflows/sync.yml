@@ -1,31 +1,32 @@
-name: Sync API Data to R2 (6 Parallel Jobs)
+name: Sync API Data to R2 (6 Jobs + Merchants)
 
 on:
   schedule:
-    # يعمل كل 5 أيام الساعة 00:00 UTC
-    - cron: '0 0 */5 * *'
+    # يعمل كل 3 أيام الساعة 00:00 UTC
+    - cron: '0 0 */3 * *'
   workflow_dispatch: # يسمح بالتشغيل اليدوي
 
 env:
-  API_BASE_URL:         ${{ secrets.API_BASE_URL }}
-  API_TOKEN:            ${{ secrets.API_TOKEN }}
-  SOURCE_ID:            ${{ secrets.SOURCE_ID }}
-  R2_ENDPOINT_URL:      ${{ secrets.R2_ENDPOINT_URL }}
-  R2_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
-  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-  R2_BUCKET_NAME:       ${{ secrets.R2_BUCKET_NAME }}
+  API_BASE_URL:                    ${{ secrets.API_BASE_URL }}
+  API_TOKEN:                       ${{ secrets.API_TOKEN }}
+  SOURCE_ID:                       ${{ secrets.SOURCE_ID }}
+  R2_ENDPOINT_URL:                 ${{ secrets.R2_ENDPOINT_URL }}
+  R2_ACCESS_KEY_ID:                ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY:            ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_BUCKET_NAME:                  ${{ secrets.R2_BUCKET_NAME }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 1: الدول 0-41 (42 دولة) + جلب التجار merchants.json
+  # Job Merchants: جلب التجار فقط — مستقل عن باقي الـ Jobs
   # ─────────────────────────────────────────────────────────────────────
-  sync-part-1:
-    name: "Part 1: Countries 0-41 + Merchants"
+  sync-merchants:
+    name: "Merchants: merchants.json"
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
     env:
-      COUNTRY_RANGE: "0-41"
+      FETCH_MERCHANTS_ONLY: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,7 +47,31 @@ jobs:
             exit 1
           fi
           echo "✅ R2_ENDPOINT_URL looks valid"
-      - name: Run Sync (Part 1 + Merchants)
+      - name: Run Sync (Merchants Only)
+        run: python sync.py
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 1: الدول 0-41 (42 دولة)
+  # ─────────────────────────────────────────────────────────────────────
+  sync-part-1:
+    name: "Part 1: Countries 0-41"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      COUNTRY_RANGE: "0-41"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install requests boto3
+      - name: Validate R2_ENDPOINT_URL
+        run: |
+          if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
+          if [[ ! "$R2_ENDPOINT_URL" == https://* ]]; then echo "❌ Must start with https://"; exit 1; fi
+          echo "✅ R2_ENDPOINT_URL OK"
+      - name: Run Sync (Part 1)
         run: python sync.py
 
   # ─────────────────────────────────────────────────────────────────────
