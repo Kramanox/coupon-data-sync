@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then
@@ -65,7 +65,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
@@ -89,7 +89,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
@@ -113,7 +113,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
@@ -137,7 +137,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
@@ -161,7 +161,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
@@ -185,7 +185,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests boto3
+        run: pip install -r requirements.txt
       - name: Validate R2_ENDPOINT_URL
         run: |
           if [ -z "$R2_ENDPOINT_URL" ]; then echo "❌ R2_ENDPOINT_URL is EMPTY!"; exit 1; fi
